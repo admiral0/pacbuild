@@ -1,11 +1,9 @@
 Things left to do
 -----------------
 
-- Better logging in apple
-
 - Automatic chroot rebuilding (either triggered by apple or a "no update since" timer)
 
-- Unionfs
+- aufs2 support (cheap from makearmpkg, must pythonize) 
 
 - Dependency handling (know what packages other packages depend on)
 
@@ -21,10 +19,8 @@ Things left to do
 
     - When a package can't be built because another package isn't built yet
 
+- Arm support
 
-Completed tasks
----------------
+- Test distcc
 
-- Pacman 3 support
-
-- Update pacman python module (because the one with namcap currently sucks)
+- Rewrite waka
