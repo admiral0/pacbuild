@@ -25,7 +25,7 @@ import threading
 import os, os.path
 import platform
 import re
-import md5
+from hashlib import md5
 import datetime, time
 import shutil
 from ConfigParser import SafeConfigParser
@@ -347,12 +347,15 @@ def _main(argv=None):
 	maxbuilds = cfgparser.get("options","maxbuilds")
 	sleeptime = cfgparser.get("options","sleeptime")
 	mirrorurl = cfgparser.get("options","mirrorurl")
-	chrootimage = cfgparser.get("options","chrootimage")
-	imagetimeout = cfgparser.get("options","imagetimeout")
+	chrootimage = cfgparser.get("options","chrootimage") #TODO: Remove this
+	imagetimeout = cfgparser.get("options","imagetimeout") #TODO Remove this
+	arch = cfgparser.get("options", "arch")
+	imagelocation = cfgparser.get("options","chrootpath")
 
 	# generate the md5 hashed password, this is a bit hacky
-	# wrt storing it back in the cfgparser opject
-	password = md5.new(password).hexdigest()
+	# wrt storing it back in the cfgparser object
+	# TODO Fix that crap
+	password = md5(password).hexdigest()
 	cfgparser.set("options","password", password)
 
 	# check the config file paths
@@ -369,15 +372,10 @@ def _main(argv=None):
 	if not isnumeric(imagetimeout):
 		raise StandardError("%s: invalid imagetimeout value %s" % (configpath, imagetimeout))
 
-	# set chroot image location if value was true
-	if chrootimage == "true":
-		imagelocation = os.path.join(dbdir, "strawberry.img")
-
 	# fill the config global dictionary
 	for i in cfgparser.items("options"):
 		config[i[0]] = i[1]
 	# add two more things that aren't in config file
-	config["arch"] = platform.machine()
 	config["ident"] = socket.gethostname()
 
 	# if daemon option is set, fork the process
@@ -404,8 +402,7 @@ def _main(argv=None):
 		# (this code removed, waka/mkchroot will take care of it)
 
 		otherargs = {}
-		if chrootimage == "true":
-			otherargs['chrootImage'] = imagelocation
+		otherargs['chrootImage'] = imagelocation
 		syslog(LOG_INFO, "Resuming unfinished build - %s"%(i.sourceFilename))
 		waka = Waka(i, os.path.join(builddir, i.sourceFilename), mirrorurl, **otherargs)
 		waka.start()
@@ -418,29 +415,29 @@ def _main(argv=None):
 				Build.delete(v.build.id)
 				del threads[i]
 		if canBuild():
-			if chrootimage == "true":
-				# this is basically verbatim from above, but we need more
-				# abstraction before it can be rewritten as non-duplicate code
-				confpath = "/tmp/mkchroot_xxx.conf"
-				conf = open(confpath, "w")
-				conf.write('WAKA_ROOT_DIR="%s"\n' % builddir)
-				conf.write('WAKA_CHROOT_DIR="chroot"\n')
-				conf.write('QUIKINST_LOCATION="/usr/share/waka/quickinst"\n')
-				conf.write('PACKAGE_MIRROR_CORE="%s%s"\n' % (mirrorurl, "/core/os/${CARCH}"))
-				conf.write('PACKAGE_MIRROR_EXTRA="%s%s"\n' % (mirrorurl, "/extra/os/${CARCH}"))
-				conf.write('DEFAULT_PKGDEST=${WAKA_ROOT_DIR}/\n')
-				conf.write('DEFAULT_KERNEL=kernel26\n')
-				conf.close()
+			# this is basically verbatim from above, but we need more
+			# abstraction before it can be rewritten as non-duplicate code
+			# TODO Change configuration method
+			confpath = "/tmp/mkchroot_xxx.conf"
+			conf = open(confpath, "w")
+			conf.write('WAKA_ROOT_DIR="%s"\n' % builddir)
+			conf.write('WAKA_CHROOT_DIR="chroot"\n')
+			conf.write('QUIKINST_LOCATION="/usr/share/waka/quickinst"\n')
+			conf.write('PACKAGE_MIRROR_CORE="%s%s"\n' % (mirrorurl, "/core/os/${CARCH}"))
+			conf.write('PACKAGE_MIRROR_EXTRA="%s%s"\n' % (mirrorurl, "/extra/os/${CARCH}"))
+			conf.write('DEFAULT_PKGDEST=${WAKA_ROOT_DIR}/\n')
+			conf.write('DEFAULT_KERNEL=kernel26\n')
+			conf.close()
 
-				if os.path.isfile(imagelocation):
-					stat = os.stat(imagelocation)
-					today = datetime.datetime.now()
-					mtime = datetime.datetime(*time.localtime(stat.st_mtime)[:7])
-					staleDiff = datetime.timedelta(days=float(imagetimeout))
-					if today - mtime >= staleDiff:
-						mkchroot(confpath, imagelocation)
-				else:
+			if os.path.isfile(imagelocation):
+				stat = os.stat(imagelocation)
+				today = datetime.datetime.now()
+				mtime = datetime.datetime(*time.localtime(stat.st_mtime)[:7])
+				staleDiff = datetime.timedelta(days=float(imagetimeout))
+				if today - mtime >= staleDiff:
 					mkchroot(confpath, imagelocation)
+			else:
+				mkchroot(confpath, imagelocation)
 			build = getNextBuild()
 			if build is not None and build is not False:
 				print "Got a new build: %s" % build.sourceFilename

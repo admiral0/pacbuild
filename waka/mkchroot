@@ -1,6 +1,6 @@
 #!/bin/bash
 
-myver="0.4"
+myver="0.96"
 
 # include for enviromental settings
 source /etc/makepkg.conf
