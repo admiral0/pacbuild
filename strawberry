@@ -364,6 +364,8 @@ def _main(argv=None):
 	if not os.path.isdir(dbdir):
 		raise StandardError("%s: invalid database directory %s" % (configpath, dbdir))
 
+        #TODO: check of the chrootimage path <--
+
 	# check the numeric config values
 	if not isnumeric(maxbuilds):
 		raise StandardError("%s: invalid maxbuilds value %s" % (configpath, maxbuilds))
@@ -444,7 +446,7 @@ def _main(argv=None):
 				
 				# This is where you'd set up waka
 				otherargs = {}
-				if chrootimage == "true":
+				if chrootimage == "true": # TODO: Change this! <---
 					otherargs['chrootImage'] = imagelocation
 				waka = Waka(build, os.path.join(builddir, build.sourceFilename), mirrorurl, **otherargs)
 				waka.start()
