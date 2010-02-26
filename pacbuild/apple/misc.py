@@ -20,7 +20,7 @@
 
 from sqlobject import *
 from datetime import datetime
-from md5 import md5
+from hashlib import md5
 
 class Arch(SQLObject):
 	name = StringCol(alternateID=True)
@@ -52,6 +52,23 @@ class Builder(SQLObject):
 		return builder
 
 class PacmanConf(SQLObject):
+	name = StringCol()
+	data = StringCol()
+	arch = ForeignKey('Arch')
+
+	@classmethod
+	def getConf(cls, name, arch):
+		confs = cls.select(AND(cls.q.name==name, cls.q.archID==arch.id))
+		confs = confs[:1]
+		conf = None
+		for c in confs:
+			conf = c
+		return conf
+
+	def md5sum(self):
+		return md5(self.data).hexdigest()
+		
+class MakepkgConf(SQLObject):
 	name = StringCol()
 	data = StringCol()
 	arch = ForeignKey('Arch')
