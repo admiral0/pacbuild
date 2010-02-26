@@ -41,7 +41,7 @@ done = False
 pacmanConfigs = []
 UMASK = 0
 WORKDIR = "/"
-MAXFD = 1024
+MAXFD = 1024 #???
 
 # define a global dictionary
 config = {}
@@ -97,6 +97,7 @@ def createDaemon():
 	return(0)
 
 class ForkWorker(object):
+	"""Class that serves as base for building processes"""
 	def start(self):
 		self.child = os.fork()
 		if self.child == 0:
@@ -115,14 +116,16 @@ class ForkWorker(object):
 			return False
 
 class PacmanConf:
+	"""Container class for pacman.conf"""
 	def __init__(self, name, arch, data):
-		self.name = name
-		self.arch = arch
-		self.data = data
+		self.name = name #name of configuration
+		self.arch = arch #architecture
+		self.data = data #pacman.conf
 	def md5sum(self):
-		return md5.new(self.data).hexdigest()
+		return md5(self.data).hexdigest()
 
 class Build(SQLObject):
+	"""Abstraction for database"""
 	cherryId = IntCol()
 	sourceFilename = StringCol()
 	source = StringCol()
@@ -130,6 +133,7 @@ class Build(SQLObject):
 	pacmanConfigMd5 = StringCol()
 
 	def _set_source(self, value):
+		"""WTF??????!"""
 		if value is not None:
 			self._SO_set_source(value.encode('base64').replace('\n',''))
 		else:
@@ -141,22 +145,25 @@ class Build(SQLObject):
 			return self._SO_get_source().decode('base64')
 
 class Waka(ForkWorker):
+	"""Abstraction for a builder thread"""
 	def __init__(self, build, buildDir, mirrorUrl, chrootImage=None):
-		self.buildDir = buildDir
+		self.buildDir = buildDir #path of the build dir
 		self.mirrorUrl = mirrorUrl
 		self.build = build
-		self.filename = build.sourceFilename
-		self.chrootImage = chrootImage
-		self.sourcePkg = os.path.join(self.buildDir, self.filename)
-		self.makeWakaConf()
-		self.makeSourceFile(build.source)
+		self.filename = build.sourceFilename #
+		self.chroot = chrootImage #path to chroot
+		self.sourcePkg = os.path.join(self.buildDir, self.filename) #path to the source file #deprecated#. Will use fixed path
+		self.makeWakaConf() # Init aufs and create configurations
+		self.makeSourceFile(build.source) #write source to fresh buildenv
 
 	def makeSourceFile(self, fileData):
 		file = open(self.sourcePkg, "wb")
 		file.write(fileData)
 		file.close()
-
+	
+	#TODO: wakaconf for new waka, and prepare chroot
 	def makeWakaConf(self):
+		"""Create dirs for aufs and create configs in it"""
 		if (not os.path.isdir(self.buildDir)):
 			os.makedirs(self.buildDir)
 		self.mkchrootPath = os.path.join(self.buildDir,"mkchroot.conf")
@@ -180,13 +187,15 @@ class Waka(ForkWorker):
 			pacmanconf.close()
 
 	def run(self):
+		"""Starts build"""
 		global done
 		syslog(LOG_INFO, "Beginning build of %s" % (self.build.sourceFilename))
-		spawnargs = ["/usr/bin/mkchroot", "-o", self.mkchrootPath]
-		if self.chrootImage:
-			spawnargs.extend(["-i", self.chrootImage])
+		spawnargs = ["/usr/bin/mkchroot", "-o", self.chroot]
 		if self.pacmanconfPath:
 			spawnargs.extend(["-p", self.pacmanconfPath])
+		# We can build packages with multiple CFLAGS & options and name them accordingly
+		if self.makepkgconfPath:  
+			spawnargs.extend(["-m", self.makepkgconfPath])
 		spawnargs.append(self.sourcePkg)
 		ret = os.spawnv(os.P_WAIT, "/usr/bin/mkchroot", spawnargs)
 		if ret > 0:
@@ -217,6 +226,7 @@ class Waka(ForkWorker):
 		shutil.rmtree(self.buildDir)
 
 class Heartbeat(ForkWorker):
+	"""Tells apple server we are online and waiting for instructions"""
 	def __init__(self):
 		self.pulse = 3600
 	def run(self):
@@ -233,6 +243,7 @@ def canBuild():
 	return Build.select().count() < int(config['maxbuilds'])
 
 def getPacmanConfig(name, arch, md5):
+	"""Requests a config to apple"""
 	global pacmanConfigs
 	for i in pacmanConfigs:
 		if i.name == name and i.arch == arch and i.md5sum() == md5:
@@ -255,11 +266,13 @@ def getPacmanConfig(name, arch, md5):
 
 
 def getNextBuild():
+	"""Gets new build from apple"""
 	try:
 		server = xmlrpclib.ServerProxy(config['url'])
 		build = server.getNextBuild(config['user'], config['password'], config['ident'], config['arch'])
 		if build is not None and build is not False:
 			syslog(LOG_INFO, "Got %s from %s for next build"%(build[1], config['url']))
+			#TODO add makepkg.conf
 			return Build(cherryId=build[0], sourceFilename=build[1], source=build[2].decode('base64'),
 						pacmanConfig=build[3], pacmanConfigMd5=build[4])
 		return None
@@ -268,6 +281,7 @@ def getNextBuild():
 		return None
 
 def sendBuild(build, binary, log):
+	"""Sends build result to apple"""
 	try:
 		server = xmlrpclib.ServerProxy(config['url'])
 		if binary is not False:
@@ -282,6 +296,7 @@ def sendBuild(build, binary, log):
 	syslog(LOG_INFO, "Uploaded %s to %s"%(build.sourceFilename, config['url']))
 
 def mkchroot(confpath, imgpath):
+"""?????"""
 	os.spawnl(os.P_WAIT, "/usr/bin/mkchroot", "-o", confpath, "-c", imgpath)
 
 def check_filename(option, opt, value):
@@ -347,8 +362,6 @@ def _main(argv=None):
 	maxbuilds = cfgparser.get("options","maxbuilds")
 	sleeptime = cfgparser.get("options","sleeptime")
 	mirrorurl = cfgparser.get("options","mirrorurl")
-	chrootimage = cfgparser.get("options","chrootimage") #TODO: Remove this
-	imagetimeout = cfgparser.get("options","imagetimeout") #TODO Remove this
 	arch = cfgparser.get("options", "arch")
 	imagelocation = cfgparser.get("options","chrootpath")
 
@@ -363,16 +376,17 @@ def _main(argv=None):
 		raise StandardError("%s: invalid package directory %s" % (configpath, builddir))
 	if not os.path.isdir(dbdir):
 		raise StandardError("%s: invalid database directory %s" % (configpath, dbdir))
-
-        #TODO: check of the chrootimage path <--
+	
+	if not os.path.isdir(imagelocation):
+		raise StandardError("%s: invalid chroot directory " % (configpath, imagelocation))
+	if not os.path.isdir(imagelocation+ "/bin/") or not os.path.isdir(imagelocation+ "/usr/"):
+		raise StandardError("%s: invalid chroot. Some files are missing in dir %s" % (configpath, imagelocation)) # ;)
 
 	# check the numeric config values
 	if not isnumeric(maxbuilds):
 		raise StandardError("%s: invalid maxbuilds value %s" % (configpath, maxbuilds))
 	if not isnumeric(sleeptime):
 		raise StandardError("%s: invalid sleeptime value %s" % (configpath, sleeptime))
-	if not isnumeric(imagetimeout):
-		raise StandardError("%s: invalid imagetimeout value %s" % (configpath, imagetimeout))
 
 	# fill the config global dictionary
 	for i in cfgparser.items("options"):
@@ -403,10 +417,8 @@ def _main(argv=None):
 		# Clean up any half-built versions- we're starting fresh
 		# (this code removed, waka/mkchroot will take care of it)
 
-		otherargs = {}
-		otherargs['chrootImage'] = imagelocation
 		syslog(LOG_INFO, "Resuming unfinished build - %s"%(i.sourceFilename))
-		waka = Waka(i, os.path.join(builddir, i.sourceFilename), mirrorurl, **otherargs)
+		waka = Waka(i, builddir, mirrorurl, imagelocation)
 		waka.start()
 		threads.append(waka)
 
@@ -419,7 +431,7 @@ def _main(argv=None):
 		if canBuild():
 			# this is basically verbatim from above, but we need more
 			# abstraction before it can be rewritten as non-duplicate code
-			# TODO Change configuration method
+			# TODO Change configuration method Qua dobbiamo fare qualcosa appena cambiamo waka -> ok
 			confpath = "/tmp/mkchroot_xxx.conf"
 			conf = open(confpath, "w")
 			conf.write('WAKA_ROOT_DIR="%s"\n' % builddir)
@@ -431,26 +443,16 @@ def _main(argv=None):
 			conf.write('DEFAULT_KERNEL=kernel26\n')
 			conf.close()
 
-			if os.path.isfile(imagelocation):
-				stat = os.stat(imagelocation)
-				today = datetime.datetime.now()
-				mtime = datetime.datetime(*time.localtime(stat.st_mtime)[:7])
-				staleDiff = datetime.timedelta(days=float(imagetimeout))
-				if today - mtime >= staleDiff:
-					mkchroot(confpath, imagelocation)
-			else:
-				mkchroot(confpath, imagelocation)
+
+			mkchroot(confpath, imagelocation) # TODO do we need it?
 			build = getNextBuild()
 			if build is not None and build is not False:
 				print "Got a new build: %s" % build.sourceFilename
-				
 				# This is where you'd set up waka
-				otherargs = {}
-				if chrootimage == "true": # TODO: Change this! <---
-					otherargs['chrootImage'] = imagelocation
-				waka = Waka(build, os.path.join(builddir, build.sourceFilename), mirrorurl, **otherargs)
+				waka = Waka(build, builddir, mirrorurl, imagelocation) 
 				waka.start()
 				threads.append(waka)
+			
 		time.sleep(float(sleeptime))
 			
 
