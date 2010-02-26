@@ -39,6 +39,7 @@ from sqlobject import *
 defaultConfig = "/etc/pacbuild/strawberry.conf"
 done = False
 pacmanConfigs = []
+makepkgConfigs = []
 UMASK = 0
 WORKDIR = "/"
 MAXFD = 1024 #???
@@ -131,6 +132,8 @@ class Build(SQLObject):
 	source = StringCol()
 	pacmanConfig = StringCol()
 	pacmanConfigMd5 = StringCol()
+	makepkgConfig = StringCol()
+	makepkgConfigMd5 = StringCol()
 
 	def _set_source(self, value):
 		"""WTF??????!"""
@@ -264,6 +267,27 @@ def getPacmanConfig(name, arch, md5):
 		syslog(LOG_ERR, "Failed to retrieve pacman config \"%s\" from %s"%(name, config['url']))
 		return None
 
+def getMakepkgConfig(name, arch, md5):
+	"""Requests a makepkg config to apple"""
+	global makepkgConfigs
+	for i in makepkgConfigs:
+		if i.name == name and i.arch == arch and i.md5sum() == md5:
+			return i
+	server = xmlrpclib.ServerProxy(config['url'])
+	try:
+		pkgconfig = server.getMakepkgConfig(config['user'], config['password'], arch, name) #devi creare questa in xmlrpclib
+		if pkgconfig is not None and pkgconfig is not False:
+			for i in makepkgConfigs:
+				if i.name == name and i.arch == arch:
+					makepkgConfigs.remove(i)
+			pkgconfig = DefaultConf(pacconfig[0], pacconfig[1], pacconfig[2])
+			makepkgConfigs.append(pkgconfig)
+			syslog(LOG_INFO, "Got pacman config \"%s\" from %s"%(name, config['url']))
+			return pkgconfig
+		return None
+	except (xmlrpclib.ProtocolError, xmlrpclib.Fault, socket.error):
+		syslog(LOG_ERR, "Failed to retrieve pacman config \"%s\" from %s"%(name, config['url']))
+		return None
 
 def getNextBuild():
 	"""Gets new build from apple"""
@@ -272,9 +296,8 @@ def getNextBuild():
 		build = server.getNextBuild(config['user'], config['password'], config['ident'], config['arch'])
 		if build is not None and build is not False:
 			syslog(LOG_INFO, "Got %s from %s for next build"%(build[1], config['url']))
-			#TODO add makepkg.conf
 			return Build(cherryId=build[0], sourceFilename=build[1], source=build[2].decode('base64'),
-						pacmanConfig=build[3], pacmanConfigMd5=build[4])
+						pacmanConfig=build[3], pacmanConfigMd5=build[4], makepkgConfig=build[5], makepkgConfigMd5=build[6])
 		return None
 	except (xmlrpclib.ProtocolError, xmlrpclib.Fault, socket.error):
 		syslog(LOG_ERR, "Couldn't fetch next build from %s"%(config['url']))
