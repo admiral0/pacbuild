@@ -3,8 +3,8 @@ export LANG=C
 source /etc/profile
 cd /waka
 pacman --noconfirm -Syu
-pacman --noconfirm -Sy #KERNEL# namcap
-tar xzfp #TARBALL#
+pacman --noconfirm -Sy namcap
+tar xzfp *.src.tar.gz
 
 # run makepkg and log the output
 (makepkg -s --noconfirm --noprogressbar 2>&1 | tee makepkg.log)

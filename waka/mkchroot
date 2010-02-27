@@ -11,8 +11,11 @@ PKGDEST=""
 LOGDEST=""
 CONFIGFILE="/etc/pacbuild/mkchroot.conf"
 PACMANFILE=""
-CREATEIMG=""
-USEIMG=""
+MAKEPKGFILE=""
+CHROOTPATH=""
+SCRIPTPATH=""
+DESTCHROOTPATH=""
+TMPCHROOTPATH=""
 
 # message functions
 # TODO these are the same as makepkg functions, so make them
@@ -61,7 +64,8 @@ cleanup() {
 		fi
 
 		msg "Removing old virtual root... (This may take a while)"
-		rm -rf $rootpath
+		umount $DESTCHROOTPATH
+		rm -rf $DESTCHROOTPATH $TMPCHROOTPATH
 		msg "Virtual root removal complete."
 	fi
 }
@@ -71,23 +75,22 @@ makeroot() {
 	local ret=0
 	cleanup
 	msg "Creating chroot directory..."
-	mkdir $rootpath || ret=1
+	mount -t aufs -o br=${TMPCHROOTPATH}:${CHROOTPATH} none ${DESTCHROOTPATH} || ret=1
 
 	return $ret
 }
 
-# mount sysfs and proc filesystems, and copy devfs
+# mount sysfs and proc filesystems, and mount /dev
 fs_mount() {
 	local ret=0
 	msg "Mounting sysfs..."
-	mount -t sysfs  sysfs  $rootpath/sys || ret=1
+	mount -t sysfs  sysfs  $DESTCHROOTPATH/sys || ret=1
 	msg "Mounting procfs..."
-	mount -t proc   proc   $rootpath/proc || ret=1
-#	mount -t usbfs  usbfs  $rootpath/proc/bus/usb || ret=1
-	msg "Copying devfs..."
-	cp -a /dev $rootpath/dev || ret=1
+	mount -t proc   proc   $DESTCHROOTPATH/proc || ret=1
+	msg "Mounting dev..."
+	mount -o bind /dev $DESTCHROOTPATH/dev || ret=1
 	msg "Copying /etc/mtab..."
-	cp -p /etc/mtab $rootpath/etc/mtab || ret=1
+	cp -p /etc/mtab $DESTCHROOTPATH/etc/mtab || ret=1
 
 	return $ret
 }
@@ -96,10 +99,11 @@ fs_mount() {
 fs_umount() {
 	local ret=0
 	msg "Umounting sysfs..."
-	umount $rootpath/sys || ret=1
-	msg "Umounting procfs..."
-#	umount $rootpath/proc/bus/usb || ret=1
-	umount $rootpath/proc || ret=1
+	umount $DESTCHROOTPATH/sys || ret=1
+	msg "Umounting dev..."
+	umount $DESTCHROOTPATH/dev || ret=1
+	msg "Umounting proc"
+	umount $DESTCHROOTPATH/proc || ret=1
 
 	return $ret
 }
@@ -108,29 +112,21 @@ fs_umount() {
 fs_bind() {
 	local ret=0
 	msg "Using global package cache..."
-	mkdir -p $rootpath/var/cache/pacman/pkg || ret=1
+	mkdir -p $DESTCHROOTPATH/var/cache/pacman/pkg || ret=1
 
 	# Try hard linking- if that doesn't work, try copying
-	cp -rl /var/cache/pacman/pkg/ $rootpath/var/cache/pacman/ || cp -r /var/cache/pacman/pkg/ $rootpath/var/cache/pacman/ || ret=1
+	mount -o bind $CHROOTPATH/var/cache/pacman/pkg/ $DESTCHROOTPATH/var/cache/pacman/ || ret=1
 
 	return $ret
 }
 
 # unbind the 'global package cache', copying any new downloads back
 fs_unbind() {
-	msg "Syncing packages back to global package cache..."
-	rsync -a $rootpath/var/cache/pacman/pkg/ /var/cache/pacman/pkg
-	# can't use a straight 'rm *' because argument list can be too long
-	find $rootpath/var/cache/pacman/pkg/ -type f -print0 | xargs -0 rm
-}
-
-# call the quickinst script to install packages from FTP
-quickinst() {
-	if [ -f /tmp/packages.txt ]; then
-		rm /tmp/packages.txt
-	fi
-	msg "Running $QUIKINST_LOCATION ftp $rootpath $PACKAGE_MIRROR_CORE"
-	source $QUIKINST_LOCATION ftp $rootpath $PACKAGE_MIRROR_CORE || return 1
+	local ret=0
+	msg "Unmounting global package cache..."
+	
+	umount $DESTCHROOTPATH/var/cache/pacman/ || ret=1
+	return ret
 }
 
 # copy resolv.conf from host system and create a pacman.conf file
@@ -138,28 +134,30 @@ conf_update() {
 	cp -L /etc/resolv.conf $rootpath/etc || return 1
 
 	if [ "$PACMANFILE" = "" ]; then
-		echo "[core]" > $rootpath/etc/pacman.d/core
-		echo "Server = ${PACKAGE_MIRROR_CORE}" >> $rootpath/etc/pacman.d/core
-
-		echo "[extra]" > $rootpath/etc/pacman.d/extra
-		echo "Server = ${PACKAGE_MIRROR_EXTRA}" >> $rootpath/etc/pacman.d/extra
+		cp /etc/pacman.conf $DESTCHROOTPATH/etc/pacman.conf || return 1
 	else
-		cp $PACMANFILE $rootpath/etc/pacman.conf || return 1
+		cp $PACMANFILE $DESTCHROOTPATH/etc/pacman.conf || return 1
+	fi
+	if [ "$MAKEPKGFILE" = "" ]; then
+		cp /etc/makepkg.conf $DESTCHROOTPATH/etc/makepkg.conf || return 1
+	else
+		cp $MAKEPKGFILE $DESTCHROOTPATH/etc/makepkg.conf || return 1
 	fi
 }
 
 # usage function
 usage() {
-	echo "mkchroot version $myver"
+	echo "mkchrootpkg version $myver"
 	echo "usage: $0 [options] <source package>"
 	echo "options:"
-	echo "  -h, --help        This help"
-	echo "  -w <destdir>      Write package to <destdir> instead of the working dir"
-	echo "  -l <destdir>      Write build log to <destdir> instead of the working dir"
-	echo "  -o <configfile>   Use an alternate config file"
-	echo "  -p <pacmanconfig> Use an alternate pacman config file"
-	echo "  -c <imgfile>      Create an image to use in subsequent builds"
-	echo "  -i <imgfile>      Use image as build base"
+	echo "  -h, --help         This help"
+	echo "  -w <destdir>       Write package to <destdir> instead of the working dir"
+	echo "  -l <destdir>       Write build log to <destdir> instead of the working dir"
+	echo "  -o <configfile>    Use an alternate config file"
+	echo "  -p <pacmanconfig>  Use an alternate pacman config file"
+	echo "  -m <makepkgconfig> Use an alternate makepkg config file"
+	echo "  -c <chrootpath>    Use a chroot"
+	echo "  -i <preparescript> Script executed before entering chroot"
 }
 
 # PROGRAM START
@@ -195,16 +193,20 @@ while [ $# -ne 0 ]; do
 						PACMANFILE=$OPTARG
 						shift
 						;;
+					m)	
+						MAKEPKGFILE=$OPTARG
+						shift
+						;;
 					o)
 						CONFIGFILE=$OPTARG
 						shift
 						;;
 					c)
-						CREATEIMG=$OPTARG
+						CHROOTPATH=$OPTARG
 						shift
 						;;
 					i)
-						USEIMG=$OPTARG
+						SCRIPTPATH=$OPTARG
 						shift
 						;;
 					*)
@@ -224,39 +226,28 @@ while [ $# -ne 0 ]; do
 done
 
 # check if config file is a valid file path
-if [ ! -f $CONFIGFILE ]; then
-	msg "No config file found: $CONFIGFILE"
-	usage
-	exit 1
-fi
+#if [ ! -f $CONFIGFILE ]; then
+#	msg "No config file found: $CONFIGFILE"
+#	usage
+#	exit 1
+#fi
 
 # get configuration (done here so it can be specified on command line)
-source $CONFIGFILE
+#source $CONFIGFILE
 
 # now that we've sourced the config file - let's make referencing
 # the most commmon path nice and easy
-rootpath="$WAKA_ROOT_DIR/$WAKA_CHROOT_DIR"
+rootpath="/var/build/"
 
 # resolve paths to absolute paths
-# TODO there has to be a better way?
-if [ -n "$CREATEIMG" ]; then
-	if echo $CREATEIMG | grep -v ^/ 2>&1 > /dev/null; then
-		CREATEIMG="$(pwd)/$CREATEIMG"
-	fi
-fi
-if [ -n "$USEIMG" ]; then
-	if echo $USEIMG | grep -v ^/ 2>&1 > /dev/null; then
-		USEIMG="$(pwd)/$USEIMG"
-	fi
-fi
 if [ -n "$TARBALL" ]; then
 	if echo $TARBALL | grep -v ^/ 2>&1 > /dev/null; then
 		TARBALL="$(pwd)/$TARBALL"
 	fi
 fi
 
-# if we aren't creating a tarball or an image, we have a problem
-if [ \( "$TARBALL" = "" -o ! -f "$TARBALL" \) -a "$CREATEIMG" = "" ]; then
+# if we aren't creating a tarball we have a problem
+if [ \( "$TARBALL" = "" -o ! -f "$TARBALL" \) ]; then
 	msg "Source package not found"
 	usage
 	exit 1
@@ -264,12 +255,17 @@ fi
 
 # if PKGDEST or LOGDEST are undefined, set them to their defaults
 if [ "$PKGDEST" = "" ]; then
-	PKGDEST=$DEFAULT_PKGDEST
+	PKGDEST="/tmp"
 fi
 if [ "$LOGDEST" = "" ]; then
-	LOGDEST=$DEFAULT_PKGDEST
+	LOGDEST="/tmp"
 fi
-
+if [ -n "$SCRIPTPATH" = "" ]; then
+	sh $SCRIPTPATH
+fi
+#generating temp dirs
+DESTCHROOTPATH=`mktemp -d`
+TMPCHROOTPATH=`mktemp -d`
 # set up the chroot directory
 makeroot
 if [ $? -ne 0 ]; then
@@ -278,45 +274,10 @@ if [ $? -ne 0 ]; then
 	exit 1
 fi
 
-# if we aren't using a preexisting image, do an install
-if [ -z "$USEIMG" ]; then
-	msg "Installing base chroot image..."
-	fs_bind # we ignore a failure of fs_bind, use && if we shouldn't
-	quickinst
-	if [ $? -ne 0 ]; then
-		fs_unbind
-		cleanup
-		error "Can't build chroot"
-		exit 1
-	fi
-else
-	msg "Extracting base image..."
-	cd $rootpath
-	tar -xjf $USEIMG
-	if [ $? -ne 0 ]; then
-		cleanup
-		error "Can't extract image"
-		exit 1
-	fi
-	# fs_bind was not called here before, perhaps due to it being slow
-	fs_bind # if fs_bind fails, we will just end up always downloading
-fi
 
-# if CREATEIMG is defined, zip up the image to the specified location
-# and exit the script- we don't need to build a package
-if [ -n "$CREATEIMG" ]; then
-	msg "Creating base image..."
-	fs_unbind
-	cd $rootpath
-	tar -cjf $CREATEIMG *
-	if [ $? -ne 0 ]; then
-		cleanup
-		error "Can't create image"
-		exit 1
-	fi
-	cleanup
-	exit 0
-fi
+# mount package cache
+fs_bind
+
 
 # mount kernel stuff to make system sane
 fs_mount
@@ -339,26 +300,21 @@ if [ $? -ne 0 ]; then
 fi
 
 if [ -f $TARBALL ]; then
-	# make a /waka directory and populate it with necessary files
-	mkdir $rootpath/waka
-	cp $TARBALL $rootpath/waka/
+	mkdir $rootpath
+	cp $TARBALL $DESTCHROOTDIR/$rootpath/
 
-	cp /usr/share/waka/build $rootpath/waka/build
-	JUSTTARBALL=$(basename $TARBALL)
-	# wow, this is a bit hacky
-	sed -i "s|#TARBALL#|${JUSTTARBALL}|g" $rootpath/waka/build
-	sed -i "s|#KERNEL#|${DEFAULT_KERNEL}|g" $rootpath/waka/build
+	cp /usr/share/waka/build $DESTCHROOTDIR/$rootpath
 	
-	chmod +x $rootpath/waka/build
+	chmod +x $DESTCHROOTDIR/$rootpath/waka/build
 	msg "Starting to build package..."
 	# chroot and kick off the build...
-	chroot $rootpath/ /waka/build
+	chroot $DESTCHROOTDIR/ $rootpath/build
 	# ...and we're back. source the PKGBUILD for fetching the package
-	source $rootpath/waka/PKGBUILD
+	source $DESTCHROOTDIR/$rootpath/waka/PKGBUILD
 
 	# TODO this is going to fail hard with pacman3, there should be a better way
-	mv $rootpath/waka/$pkgname-$pkgver-$pkgrel-$CARCH.pkg.tar.gz $PKGDEST || warning "Package could not be retrieved!"
-	mv $rootpath/waka/makepkg.log $LOGDEST/$pkgname-$pkgver-$pkgrel-$CARCH.makepkg.log || warning "Logfile could not be retrieved!"
+	mv $DESTCHROOTDIR/$rootpath/$pkgname*pkg.tar.gz $PKGDEST || warning "Package could not be retrieved!"
+	cat $DESTCHROOTDIR/$rootpath/makepkg.log >> $LOGDEST/makepkg.log || warning "Logfile could not be retrieved!"
 else
 	error "Could not find source tarball!"
 fi
